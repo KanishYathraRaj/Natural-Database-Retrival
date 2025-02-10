@@ -3,4 +3,14 @@ streamlit
 pymysql
 sqlparse
 regex
+rapidfuzz
+jupyter
 
+pypdf2
+python-docx
+ollama
+reportlab
+json
+chromadb
+google-generativeai
+numpy

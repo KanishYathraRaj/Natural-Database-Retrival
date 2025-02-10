@@ -4,6 +4,7 @@ import time
 import os
 import streamlit as st
 import json
+from rapidfuzz import process
 
 DB_CONFIG = {
     "host": "localhost",
@@ -60,6 +61,8 @@ tables = {
 
 with open('ner.json', 'r') as f:
     ner = json.load(f)
+
+ALL_ENTITIES = {word.lower(): word for category in ner.values() for word in category}
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RATE_LIMIT_DELAY = 1
@@ -142,6 +145,21 @@ def execute_sql_queries(queries):
     finally:
         connection.close()
 
+def correct_spelling(user_input: str, threshold: int = 85) -> str:
+    words = user_input.split()
+    corrected_words = []
+    for word in words:
+        result = process.extractOne(word.lower(), ALL_ENTITIES.keys(), score_cutoff=threshold)
+        if result:
+            match = result[0]
+        else:
+            match = None
+        if match:
+            corrected_words.append(ALL_ENTITIES[match])
+        else:
+            corrected_words.append(word)
+    return " ".join(corrected_words)
+
 history = []
 
 def main():
@@ -155,9 +173,9 @@ def main():
         DB_CONFIG['port'] = st.text_input("Database Port", DB_CONFIG['port'])
 
     user_input = st.sidebar.text_area("Ask Your Database", placeholder="Ask your question here...")
-
+    spell_corrected_input = correct_spelling(user_input)
     tagged_input = []
-    for word in user_input.split():
+    for word in spell_corrected_input.split():
         for entity, values in ner.items():
             if word.lower() in [v.lower() for v in values]:
                 tag = entity
