@@ -1,0 +1,32 @@
+{
+  "businessUnit": [
+    "Cloud",
+    "Finance",
+    "OpenSDN",
+    "Platforms",
+    "SQA"
+  ],
+  "organization": [
+    "facebook",
+    "Google",
+    "IBM",
+    "Meta",
+    "Microsoft",
+    "Oracle",
+    "SAP",
+    "Zipstack"
+  ],
+  "repository": [
+    "ansible",
+    "bootstrap",
+    "django",
+    "electron",
+    "flask",
+    "gatsby",
+    "kubernetes",
+    "react",
+    "tensorflow",
+    "unstract",
+    "vue"
+  ]
+}

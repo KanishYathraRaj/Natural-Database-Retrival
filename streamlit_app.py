@@ -3,6 +3,7 @@ import pymysql
 import time
 import os
 import streamlit as st
+import json
 
 DB_CONFIG = {
     "host": "localhost",
@@ -57,6 +58,9 @@ tables = {
     "t_theme": "Themes"
 }
 
+with open('ner.json', 'r') as f:
+    ner = json.load(f)
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RATE_LIMIT_DELAY = 1
 MAX_RETRIES = 3
@@ -78,7 +82,7 @@ def get_LLM_response(prompt):
 
             last_request_time = time.time()
 
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-thinking-exp-01-21:generateContent?key={GEMINI_API_KEY}"
             headers = {"Content-Type": "application/json"}
             payload = {
                 "contents": [
@@ -122,38 +126,59 @@ def execute_sql_queries(queries):
     try:
         with connection.cursor() as cursor:
             for query in queries:
-                cursor.execute(query)
-                data = {
-                    'query': query,
-                    'data': cursor.fetchall()
-                }
-                results.append(data)
+                try:
+                    cursor.execute(query)
+                    data = {
+                        'query': query,
+                        'data': cursor.fetchall()
+                    }
+                    results.append(data)
+                except Exception:
+                    results.append({
+                        'query': query,
+                        'data': "No data"
+                    })
         return results
     finally:
         connection.close()
 
-
 history = []
 
 def main():
-    # st.set_page_config(page_title="Database Query Assistant", layout="wide")
     st.title("Chatbase")
-
     st.sidebar.title("Input Configs")
-    DB_CONFIG['host'] = st.sidebar.text_input("Database Host", DB_CONFIG['host'])
-    DB_CONFIG['user'] = st.sidebar.text_input("Database User", DB_CONFIG['user'])
-    DB_CONFIG['password'] = st.sidebar.text_input("Database Password", DB_CONFIG['password'], type="password")
-    DB_CONFIG['database'] = st.sidebar.text_input("Database Name", DB_CONFIG['database'])
-    DB_CONFIG['port'] = st.sidebar.text_input("Database Port", DB_CONFIG['port'])
+    with st.sidebar.expander(" # **Input Configs**"):
+        DB_CONFIG['host'] = st.text_input("Database Host", DB_CONFIG['host'])
+        DB_CONFIG['user'] = st.text_input("Database User", DB_CONFIG['user'])
+        DB_CONFIG['password'] = st.text_input("Database Password", DB_CONFIG['password'], type="password")
+        DB_CONFIG['database'] = st.text_input("Database Name", DB_CONFIG['database'])
+        DB_CONFIG['port'] = st.text_input("Database Port", DB_CONFIG['port'])
 
-    user_input = st.text_input("Enter your query:", "")
+    user_input = st.sidebar.text_area("Ask Your Database", placeholder="Ask your question here...")
 
-    if st.button("Send"):
+    tagged_input = []
+    for word in user_input.split():
+        for entity, values in ner.items():
+            if word.lower() in [v.lower() for v in values]:
+                tag = entity
+                break
+        else:
+            tag = "O"
+                
+        if tag == "O":
+            tagged_input.append(word)
+        else:
+            tagged_input.append(f"{word}({tag})")
+    tagged_input = " ".join(tagged_input)
+    st.sidebar.info(f"Tagged Input: {tagged_input}")
+
+    if st.sidebar.button("Send"):
         with st.spinner("Processing..."):
             query = f'''
             Select the relevant tables from the table names list based on the user input.
 
             user input: {user_input}
+            ner tagged user input: {tagged_input}
 
             table names list with their descriptions: 
             {tables}
@@ -173,7 +198,6 @@ def main():
             for relevant_table in relevant_tables:
                 columns = get_columns(relevant_table.strip())
                 table_columns[relevant_table.strip()] = columns
-                # st.sidebar.write(f"Columns for {relevant_table.strip()}: {columns}")
 
             query = f'''
             You have been provided with the database tables and their columns.
@@ -181,52 +205,89 @@ def main():
             Ensure the SQL queries give the relevant information as per user input.
 
             user input: {user_input}
-
+            ner data: {ner}
             database tables with their columns: 
             {table_columns}
 
+            Instruction:
             Strictly format your response with only the SQL queries
             and ensure you only generate the queries based on the given database structure.
+            if you need to join tables, ensure you do so based on the given tables.
+            if you need to use subqueries, ensure you do so based on the given tables.
+            if user requests for past n months data, ensure to use DATE_SUB() function to get the data.
+            don't use any hardcoded values in the queries.
+            dont't add 'sql' or '```' in the queries.
+            dont't generate create, update, delete queries even if the user asks for it.
 
             Your response should be in the following format:
             <sql_query_1>;
             <sql_query_2>; 
             <sql_query_3>; 
+
+            Example:
+            SELECT * FROM table_name WHERE condition;
+            SELECT column1, column2 FROM table_name WHERE condition;
+            SELECT column1 FROM table_name WHERE condition in (SELECT column2 FROM table_name WHERE condition);
             ...
             '''
 
             sql_queries = get_LLM_response(query)
+            st.sidebar.warning(sql_queries)
 
             # Extract the SQL queries from the response
-            sql_queries_list = sql_queries.strip().split('\n')
+            sql_queries_list = sql_queries.strip().split(';')
 
             # Remove the ```sql and ``` from the list
             sql_queries_list = [query for query in sql_queries_list if query not in ['```sql', '```']]
-            st.sidebar.info(f"Generated SQL Queries: {sql_queries_list}")
+            # st.sidebar.info(f"Generated SQL Queries: {sql_queries_list}")
+            st.sidebar.title("SQL Queries")
+            new_sql_queries_list = []
+            for sql_query in sql_queries_list:
+                sql_query = sql_query.replace('\n', ' ').strip() + ";"
+                new_sql_queries_list.append(sql_query)
+            for sql_query in new_sql_queries_list:
+                st.sidebar.info(f"{sql_query}")
 
             # Execute the SQL queries and fetch the data
-            data = execute_sql_queries(sql_queries_list)
-            st.sidebar.info(f"Query Results: {data}")
+            data = execute_sql_queries(new_sql_queries_list)
+            st.sidebar.warning(f"Query Results: {data}")
 
             query = f'''
-            You have been provided with the queries and their results.
-            Answer the user query based on the given data
+            You have been provided with query results containing relevant information.  
 
-            user query: {user_input}
+            Answer the user query based on this data in a clear, informative, and natural way, 
+            ensuring the response is free of database-specific elements such as IDs, column names, and table names.  
 
-            queries and their results:
-            {data}
+            ### User Query:  
+            {user_input}  
 
-            Strictly format your response with only the answer to the user query
-            and ensure you only don't generate anything else.
+            ### Relevant Data:  
+            {data}  
 
-            Your response should be in the following format:
-            <answer to the user query in detail>
+            ### Instructions:  
+            - Provide a well-structured and descriptive response.  
+            - Avoid referencing database-specific elements such as column names, table names, or raw IDs.  
+            - Ensure the response is natural and understandable to the user.  
+            - Strictly format your response with only the answer to the user query.  
+            - Your response should be enclosed within `<answer>` tags.  
+
+            ### Response Format:
+            <answer>  
+            Your response here  
+            </answer>
             '''
+
             answer = get_LLM_response(query)
+            answer = answer.replace("<answer>", "").replace("</answer>", "").strip()
             history.append({"user": user_input, "bot": answer})
 
-            for item in history:
+            # Save history to session state
+            if 'history' not in st.session_state:
+                st.session_state.history = []
+            st.session_state.history.append({"user": user_input, "bot": answer})
+
+            # Display chat history
+            for item in reversed(st.session_state.history):
                 st.info(f"**User🧑‍💻:** {item['user']}")
                 st.success(f"**Bot🤖:** {item['bot']}")
 
